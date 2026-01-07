@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  frontera-app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: frontera-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app
+      - ./content:/content
+      - ./frontend-simple:/frontend-simple
+    environment:
+      - PYTHONUNBUFFERED=1
+      - R_HOME=/usr/local/lib/R
+      - PYTHONPATH=/app
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload

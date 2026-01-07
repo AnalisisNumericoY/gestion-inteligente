@@ -1,0 +1,19 @@
+# Ignorar estos archivos/directorios
+.git
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+*.egg-info/
+dist/
+*.log
+build/
+.DS_Store
+Thumbs.db
+node_modules/
+frontend-angular/ 
