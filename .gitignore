@@ -1,0 +1,29 @@
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Entornos virtuales
+env/
+venv/
+.env
+.venv
+
+# Archivos temporales/logs
+*.log
+.DS_Store
+Thumbs.db
+
+# Outputs dinámicos (Excels generados por el modelo)
+content/output/*
+content/Recomendacion_PYP.xlsx  # O *.xlsx si todos son dinámicos
+
+# Inputs modificados (si no quieres trackear cambios runtime)
+content/input/Input_frontera.xlsx  # Solo si se modifica en runtime; si es estático, no lo ignores
+
+# Otros (agrega si aplica)
+build/
+dist/
+*.egg-info/
+node_modules/  # Si hay frontend
