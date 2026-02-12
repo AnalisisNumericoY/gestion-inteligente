@@ -1,29 +1,67 @@
-# Python caches
+# ============================================
+# ARCHIVOS GENERADOS DINÁMICAMENTE (IGNORAR)
+# ============================================
+
+# Excels de entrada/salida generados en runtime
+content/input/Input_frontera.xlsx
+content/Recomendacion_PYP.xlsx
+content/output/recomendaciones_PYP*.xlsx
+
+# IMPORTANTE: NO ignorar estos archivos críticos:
+# - content/output/modelo_30_oct_2025.RData (modelo ML)
+# - content/output/08_data_maestro_sin_outliers.RData (datos históricos)
+# - content/input/catalogo_actividades.xlsx (catálogo)
+
+# ============================================
+# PYTHON
+# ============================================
 __pycache__/
+*.py[cod]
+*$py.class
 *.pyc
 *.pyo
 *.pyd
-
-# Entornos virtuales
+*.so
+.Python
+*.egg-info/
+dist/
+build/
 env/
 venv/
 .env
 .venv
 
-# Archivos temporales/logs
+# ============================================
+# R
+# ============================================
+.Rproj.user/
+.Rhistory
+# NO ignorar .RData específicos que son parte del modelo
+
+# ============================================
+# LOGS Y TEMPORALES
+# ============================================
 *.log
+*.tmp
+*.temp
+
+# ============================================
+# IDEs
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ============================================
+# SISTEMA OPERATIVO
+# ============================================
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Outputs dinámicos (Excels generados por el modelo)
-content/output/*
-content/Recomendacion_PYP.xlsx  # O *.xlsx si todos son dinámicos
-
-# Inputs modificados (si no quieres trackear cambios runtime)
-content/input/Input_frontera.xlsx  # Solo si se modifica en runtime; si es estático, no lo ignores
-
-# Otros (agrega si aplica)
-build/
-dist/
-*.egg-info/
-node_modules/  # Si hay frontend
+# ============================================
+# NODE (por si hay frontend)
+# ============================================
+node_modules/

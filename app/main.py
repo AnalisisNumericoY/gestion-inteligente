@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi import Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 import pandas as pd
 import numpy as np
 import subprocess
@@ -11,6 +12,7 @@ import os
 import shutil
 import tempfile
 import time
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -48,6 +50,52 @@ OUTPUT_DIR = CONTENT_DIR / "output"
 for dir_path in [INPUT_DIR, OUTPUT_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
+# ============ MODELOS PYDANTIC ============
+
+class PredictRequest(BaseModel):
+    """Modelo de entrada para la predicción del modelo R"""
+    
+    model_config = {"populate_by_name": True}
+    
+    sector_econom: str = Field(
+        ..., 
+        alias="Sector_Econom",
+        description="Sector Económico de la empresa",
+        example="COMERCIO"
+    )
+    tamano_emp: str = Field(
+        ..., 
+        alias="Tamano_Emp",
+        description="Tamaño de la empresa (Pequeña, Mediana, Grande, Micro)",
+        example="Mediana"
+    )
+    activ_econ: str = Field(
+        ..., 
+        alias="Activ_Econ",
+        description="Código de Actividad Económica (CIIU)",
+        example="6201"
+    )
+    sucursal: str = Field(
+        ..., 
+        alias="Sucursal",
+        description="Departamento de la sucursal",
+        example="ANTIOQUIA"
+    )
+    num_empleados: int = Field(
+        ..., 
+        alias="Num_Empleados",
+        description="Número de empleados de la empresa",
+        example=50,
+        gt=0
+    )
+    tasa_deseada: float = Field(
+        ..., 
+        description="Tasa deseada en porcentaje",
+        example=5.5,
+        ge=0,
+        le=100
+    )
+
 # ============ ENDPOINTS ============
 
 @app.get("/", response_class=HTMLResponse)
@@ -77,25 +125,37 @@ async def health_check():
     }
     return checks
 
-@app.post("/api/predict")
-async def predict(request: Request):
+@app.post("/api/predict", summary="Ejecutar Modelo de Predicción", tags=["Predicción"])
+async def predict(data: PredictRequest):
     """
-    Endpoint principal: Recibe los 6 parámetros, ejecuta el modelo R y retorna resultados
+    Ejecuta el modelo R de predicción basado en los 6 parámetros de entrada.
+    
+    **Parámetros de entrada:**
+    - **sector_econom**: Sector económico (ej: COMERCIO, SERVICIOS, MANUFACTURA)
+    - **tamano_emp**: Tamaño empresa (Pequeña, Mediana, Grande, Micro)
+    - **activ_econ**: Código CIIU de actividad económica
+    - **sucursal**: Departamento de la sucursal
+    - **num_empleados**: Número de empleados (entero positivo)
+    - **tasa_deseada**: Tasa deseada en porcentaje (0-100)
+    
+    **Retorna:**
+    - Lista de actividades PYP recomendadas con sus porcentajes
+    - Tiempo de ejecución
+    - URL para descargar el Excel completo
+    
+    **Tiempo estimado:** 5-30 segundos dependiendo de la complejidad.
     """
     start_time = time.time()
     
     try:
-        # Obtener datos como JSON
-        form_data = await request.json()
-
-        # 1. Preparar datos de entrada
+        # 1. Preparar datos de entrada (normalizar texto a mayúsculas y limpiar espacios)
         input_data = {
-            "Sector_Econom": form_data.get("sector_econom"),
-            "Tamano_Emp": form_data.get("tamano_emp"),
-            "Activ_Econ": form_data.get("activ_econ"),
-            "Sucursal": form_data.get("sucursal"),
-            "Num_Empleados": form_data.get("num_empleados"),
-            "tasa_deseada": form_data.get("tasa_deseada")
+            "Sector_Econom": data.sector_econom.upper().strip(),
+            "Tamano_Emp": data.tamano_emp.strip(),
+            "Activ_Econ": data.activ_econ.strip(),
+            "Sucursal": data.sucursal.upper().strip(),
+            "Num_Empleados": data.num_empleados,
+            "tasa_deseada": data.tasa_deseada
         }
 
         logger.info(f"Datos recibidos: {input_data}")
@@ -142,69 +202,129 @@ async def predict(request: Request):
         # 4. Buscar archivo de salida generado por R
         output_excel_path = None
         posibles_rutas = [
-            CONTENT_DIR / "recomendaciones_PYP.xlsx",  # Ruta original
+            CONTENT_DIR / "Recomendacion_PYP.xlsx",  # Ruta principal donde R genera el archivo
             OUTPUT_DIR / "recomendaciones_PYP.xlsx",   # Ruta alternativa
-            CONTENT_DIR / "output" / "recomendaciones_PYP.xlsx"
         ]
         
         for ruta in posibles_rutas:
             if ruta.exists():
                 output_excel_path = ruta
+                logger.info(f"Archivo de resultados encontrado en: {output_excel_path}")
                 break
         
         if not output_excel_path:
-            # Si R no generó el archivo, crear uno de ejemplo
             logger.warning("R no generó archivo de salida. Creando ejemplo.")
             output_excel_path = crear_ejemplo_resultados(input_data)
         
         # 5. Leer resultados del Excel
         try:
-            df_results = pd.read_excel(output_excel_path)
-            logger.info(f"Resultados leídos. Columnas: {df_results.columns.tolist()}")
+            # Leer Excel desde la fila 4 (skiprows=3 porque las primeras 3 filas están vacías)
+            df_results = pd.read_excel(output_excel_path, skiprows=3)
+            logger.info(f"Excel leído: {output_excel_path.name}, Columnas: {df_results.columns.tolist()}, Filas: {len(df_results)}")
+            
+            # Verificar que tenga las columnas esperadas
+            required_cols = ["codigo_actividad", "ACTIVIDAD", "porcentaje_recomendado"]
+            if not all(col in df_results.columns for col in required_cols):
+                logger.error(f"Columnas esperadas no encontradas. Columnas actuales: {df_results.columns.tolist()}")
+                raise ValueError("Estructura de Excel no coincide con la esperada")
+            
+            # Leer el footer (última fila después de los datos)
+            # El footer está en las filas que contienen texto en lugar de datos numéricos
+            footer_info = None
+            try:
+                # Intentar leer la última fila no vacía del Excel completo
+                df_full = pd.read_excel(output_excel_path, header=None)
+                # Buscar la última fila que tenga contenido
+                for idx in range(len(df_full) - 1, -1, -1):
+                    row_content = df_full.iloc[idx, 0]  # Primera columna
+                    if pd.notna(row_content) and isinstance(row_content, str):
+                        if "estimación" in row_content.lower() or "diferencia" in row_content.lower():
+                            footer_info = str(row_content)
+                            logger.info(f"Footer encontrado: {footer_info[:100]}...")
+                            break
+            except Exception as e:
+                logger.warning(f"No se pudo leer el footer: {e}")
+                
         except Exception as e:
-            logger.error(f"Error leyendo Excel: {e}")
-            df_results = pd.DataFrame({
-                "Variable": ["Ejemplo", "Ejemplo"],
-                "Valor": ["Demo", "Demo"],
-                "Recomendacion": ["Resultado de prueba", "Resultado de prueba"]
-            })
+            logger.error(f"Error leyendo Excel real ({output_excel_path}): {e}. Usando datos de fallback.")
+            # Si falla, buscar el archivo de ejemplo
+            fallback_path = OUTPUT_DIR / "recomendaciones_PYP_ejemplo.xlsx"
+            if fallback_path.exists():
+                logger.info(f"Usando archivo de fallback: {fallback_path}")
+                df_results = pd.read_excel(fallback_path, skiprows=3)
+                footer_info = None
+            else:
+                logger.error("Ni archivo real ni fallback disponibles. Creando datos mínimos.")
+                df_results = pd.DataFrame({
+                    "codigo_actividad": ["AR0000"],
+                    "ACTIVIDAD": ["Error: Verificar generación de Excel por R"],
+                    "porcentaje_recomendado": [100.0]
+                })
+                footer_info = None
         
         # 6. Preparar respuesta
         execution_time = round(time.time() - start_time, 2)
         
-        # Convertir DataFrame a lista de diccionarios para el frontend
-        results_list = []
+        # Convertir DataFrame a lista de actividades recomendadas
+        actividades_recomendadas = []
         for _, row in df_results.iterrows():
-            # Asumir que el Excel tiene columnas específicas
-            # Ajustar según la estructura real de tu Excel
-            if "Variable" in df_results.columns and "Valor" in df_results.columns:
-                results_list.append({
-                    "variable": str(row.get("Variable", "")),
-                    "value": str(row.get("Valor", "")),
-                    "recomendacion": str(row.get("Recomendacion", row.get("Recomendación", "")))
+            # Filtrar filas vacías o con valores nulos
+            if pd.notna(row.get("codigo_actividad")) and pd.notna(row.get("porcentaje_recomendado")):
+                actividades_recomendadas.append({
+                    "codigo_actividad": str(row["codigo_actividad"]).strip(),
+                    "actividad": str(row["ACTIVIDAD"]).strip(),
+                    "porcentaje_recomendado": round(float(row["porcentaje_recomendado"]), 2)
                 })
-            else:
-                # Si no tiene las columnas esperadas, usar todas las columnas
-                for col in df_results.columns:
-                    results_list.append({
-                        "variable": col,
-                        "value": str(row[col]),
-                        "recomendacion": ""
-                    })
         
-        # Limitar a 20 resultados para no saturar el frontend
-        results_list = results_list[:20]
+        # Calcular metadatos
+        total_actividades = len(actividades_recomendadas)
+        suma_porcentajes = round(sum(act["porcentaje_recomendado"] for act in actividades_recomendadas), 2)
+        
+        # Parsear información del footer si existe
+        metadata = {
+            "total_actividades": total_actividades,
+            "suma_porcentajes": suma_porcentajes,
+            "timestamp": datetime.now().isoformat(),
+            "archivo_fuente": output_excel_path.name
+        }
+        
+        # Extraer información del footer si existe
+        if footer_info:
+            try:
+                # Extraer error de estimación (buscar patrón "X.XX%")
+                error_match = re.search(r'error de estimación del ([\d.]+)%', footer_info)
+                if error_match:
+                    metadata["error_estimacion_porcentaje"] = float(error_match.group(1))
+                
+                # Extraer diferencia con tasa deseada (más tolerante con puntos finales)
+                diff_match = re.search(r'diferencia con la tasa deseada es de ([\d.]+)', footer_info)
+                if diff_match:
+                    # Limpiar puntos finales extras
+                    valor = diff_match.group(1).rstrip('.')
+                    metadata["diferencia_tasa"] = float(valor)
+                
+                # Extraer nivel utilizado (más flexible con el final)
+                nivel_match = re.search(r'criterios deseados de (.+?)[\.\n]', footer_info)
+                if nivel_match:
+                    metadata["nivel_historico_usado"] = nivel_match.group(1).strip()
+                
+                # Guardar el footer completo
+                metadata["footer_completo"] = footer_info
+                
+            except Exception as e:
+                logger.warning(f"Error parseando footer: {e}")
+                metadata["footer_completo"] = footer_info
         
         response_data = {
             "status": "success",
             "execution_time": execution_time,
             "input_data": input_data,
-            "results_count": len(results_list),
-            "results": results_list,
-            "excel_download_url": f"/api/download/results"
+            "metadata": metadata,
+            "actividades_recomendadas": actividades_recomendadas,
+            "excel_download_url": "/api/download/results"
         }
         
-        logger.info(f"Predicción completada en {execution_time}s. Resultados: {len(results_list)} items")
+        logger.info(f"Predicción completada en {execution_time}s. Actividades recomendadas: {total_actividades}")
         
         return response_data
         
@@ -265,35 +385,36 @@ async def test_r():
 def crear_ejemplo_resultados(input_data: Dict) -> Path:
     """Crea un archivo Excel de ejemplo cuando R falla"""
     ejemplo_data = {
-        "Variable": [
-            "Sector Económico",
-            "Tamaño Empresa", 
-            "Actividad Económica",
-            "Recomendación Principal",
-            "Tasa Sugerida",
-            "Score de Riesgo"
+        "codigo_actividad": [
+            "AR0001",
+            "AR0002", 
+            "AR0003",
+            "AR0004",
+            "AR0005"
         ],
-        "Valor": [
-            input_data["Sector_Econom"],
-            input_data["Tamano_Emp"],
-            input_data["Activ_Econ"],
-            "Optimizar estructura de capital",
-            f"{input_data['tasa_deseada'] + 0.5}%",
-            "Bajo"
+        "ACTIVIDAD": [
+            "Asesoría técnica y formación integral para la conformación de brigadas de emergencia",
+            "Asesoría y asistencia técnica para el diseño de estándares de seguridad",
+            "Programa integral de gestión para la prevención de riesgos",
+            "Asesoría técnica en identificación de peligros y evaluación de riesgos",
+            "Consulta médica ocupacional integral"
         ],
-        "Recomendacion": [
-            "Mantener sector actual",
-            "Considerar expansión controlada",
-            "Evaluar diversificación",
-            "Reducir deuda a corto plazo",
-            "Basado en perfil de riesgo",
-            "Cliente preferencial"
+        "porcentaje_recomendado": [
+            25.5,
+            20.0,
+            18.3,
+            15.7,
+            20.5
         ]
     }
     
     df_ejemplo = pd.DataFrame(ejemplo_data)
     output_path = OUTPUT_DIR / "recomendaciones_PYP_ejemplo.xlsx"
-    df_ejemplo.to_excel(output_path, index=False)
+    
+    # Crear Excel con formato similar al generado por R (3 filas vacías al inicio)
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        # Escribir DataFrame empezando en la fila 4 (row 3 en base 0)
+        df_ejemplo.to_excel(writer, index=False, startrow=3, sheet_name='Recomendacion_PYP')
     
     logger.info(f"Archivo de ejemplo creado en: {output_path}")
     return output_path
